@@ -43,13 +43,31 @@ class ResourceDomainStack(core.Stack):
 
         # ファイルサーバー用EC2ホスト
         member_windows = ec2.Instance(
-            self, 'FileServer',
+            self, 'FileServer1',
             instance_type=ec2.InstanceType('t3.large'),
             machine_image=ec2.MachineImage.latest_windows(
                 version=ec2.WindowsVersion.WINDOWS_SERVER_2016_JAPANESE_FULL_BASE),
             key_name=self.node.try_get_context('key_name'),
             vpc=vpc,
-            vpc_subnets=ec2.SubnetSelection(subnet_type=ec2.SubnetType.ISOLATED),
+            vpc_subnets=ec2.SubnetSelection(
+                subnets=[vpc.isolated_subnets[0]]
+            ),
+            security_group=internal_sg
+        )
+        member_windows.role.add_managed_policy(
+            iam.ManagedPolicy.from_aws_managed_policy_name('AmazonSSMManagedInstanceCore'))
+
+        # ファイルサーバー用EC2ホスト
+        member_windows = ec2.Instance(
+            self, 'FileServer2',
+            instance_type=ec2.InstanceType('t3.large'),
+            machine_image=ec2.MachineImage.latest_windows(
+                version=ec2.WindowsVersion.WINDOWS_SERVER_2016_JAPANESE_FULL_BASE),
+            key_name=self.node.try_get_context('key_name'),
+            vpc=vpc,
+            vpc_subnets=ec2.SubnetSelection(
+                subnets=[vpc.isolated_subnets[1]]
+            ),
             security_group=internal_sg
         )
         member_windows.role.add_managed_policy(

@@ -1,4 +1,4 @@
-# FSx-PoC-Environment
+# DFSR-PoC-Environment
 
 #### インフラ構成
 
@@ -88,7 +88,7 @@ cdk deploy *Network*Stack *Bastion*Stack --require-approval never
 - 双方からのルートを定義します。
 - 双方のセキュリティグループの通信を許可します。
 
-## resource.example.com（Self-managed AD）のセットアップ
+## resource.example.comのセットアップ
 
 ドメインコントローラー用のWindowsインスタンスと、このドメインの管理下に置くメンバー用のWindowsインスタンスと、ファイルサーバー用のWindowsインスタンスをデプロイします。
 
@@ -116,7 +116,7 @@ Get-WindowsFeature
 
 （ドメインの機能レベル2016の場合）
 
-```
+```powershell
 #
 # AD DS 配置用の Windows PowerShell スクリプト
 #
@@ -137,6 +137,13 @@ Install-ADDSForest `
 ```
 
 自動的に再起動するのでしばらく待ちます。
+
+### DNSサフィックス
+
+ドメインコントローラーに踏み台サーバー経由でログインし、DNSの設定でサフィックスの設定で以下を追加します。
+
+- resource.example.com
+- japan.example.com
 
 ### メンバーとファイルサーバーのドメインへの参加
 
@@ -181,7 +188,7 @@ Restart-Computer -Force
 踏み台インスタンスから、メンバーインスタンスに`Administrator@resource.example.com`でRDPできることを確認します。
 このユーザーのパスワードはドメインコントローラーの`Administrator`ユーザーのパスワードなので、マネジメントコンソールで確認できます。
 
-## japan.example.com（Self-managed AD）のセットアップ
+## japan.example.comのセットアップ
 
 ドメインコントローラー用のWindowsインスタンスをデプロイします。
 
@@ -193,7 +200,7 @@ cdk deploy *JapanDomainStack --require-approval never
 
 `japan.example.com`のドメインを作成します。
 
-踏み台インスタンスを経由してドメインコントローラーインスタンス（ResourceDomainStack/Member）にRDPし、PowerShellを起動します。
+踏み台インスタンスを経由してドメインコントローラーインスタンス（JapanDomainStack/DomainController）にRDPし、PowerShellを起動します。
 あるいは、セッションマネージャーでPowerShellを起動します。
 
 ADドメインサービスの機能をインストールします。
@@ -209,7 +216,7 @@ Get-WindowsFeature
 
 （ドメインの機能レベル2016の場合）
 
-```
+```powershell
 #
 # AD DS 配置用の Windows PowerShell スクリプト
 #
@@ -230,6 +237,13 @@ Install-ADDSForest `
 ```
 
 自動的に再起動するのでしばらく待ちます。
+
+### DNSサフィックス
+
+ドメインコントローラーに踏み台サーバー経由でログインし、DNSの設定でサフィックスの設定で以下を追加します。
+
+- japan.example.com
+- resource.example.com
 
 ### ユーザーの作成
 
@@ -294,7 +308,7 @@ Add-DnsServerConditionalForwarderZone `
 Get-DnsServerZone
 ```
 
-### 信頼関係の作成 
+### 信頼関係の作成
 
 この作業をPowerShellでやるのは難しいのでここはGUIを使います。
 
@@ -361,55 +375,288 @@ AD環境であっても、メンバーインスタンスではAdministratorsグ�
 
 踏み台インスタンスから、メンバーインスタンスに`user1@japan.example.com`でRDPできることを確認します。
 
-## FSxのデプロイ
+## 共有フォルダの作成
 
-（ここは以下のようにCDKでもできるが、時間がかかるので、GUIを使った方がよいかも）
+各ファイルサーバーで共有ディレクトリを作成します。
 
-resource.example.comに接続するファイルシステムのデプロイにはドメンコントローラーのIPアドレスと、接続に使用するユーザーとパスワードが必要です。
-`cdk.context.json`に記載します。本来は権限を絞ったユーザーで接続するべきですが、検証なのでAdministratorを使います。
-
-FSxリソースをデプロイします（かなり時間がかかります）。
-
-```shell
-cdk deploy *ResourceDomainFSxStack --require-approval never
-```
-
-### マウント確認
-
-FSxのファイルシステムのDNS名を確認します。
-
-```shell
-aws fsx describe-file-systems | \
-  jq -r '.FileSystems[] |
-           select( .Tags ) | 
-           select( [ select( .Tags[].Value | test("ResourceDomainFSxStack") ) ] | length > 0 ) | 
-           .DNSName'
-```
-
-メンバーインスタンスに`user1@japan.example.com`でRDPし、FSxのファイルシステムにネットワークドライブを割り当てます。
-`¥`と`\`の違い（Windows上では同じに見える）でエラーになっていたことがあったので注意。マネジメントコンソールで「Attach」ボタンを押してコマンドを取得した方が確実です。
+リモート実行する場合は以下のようにします。
 
 ```powershell
-net use z: \\<DNS名>\share
+$FileServer1 = "EC2AMAZ-7TRSGU1"
+$FileServer2 = "EC2AMAZ-3GTQGC8"
+$FileServer3 = "EC2AMAZ-RRC6G8L"
+Invoke-Command -ComputerName $FileServer1 -ScriptBlock { New-Item 'C:\Share1' -ItemType Directory }
+Invoke-Command -ComputerName $FileServer1 -ScriptBlock { New-SmbShare -Name "Share1" -Path 'C:\Share1' -FullAccess "everyone" }
+Invoke-Command -ComputerName $FileServer2 -ScriptBlock { New-Item 'C:\Share1' -ItemType Directory }
+Invoke-Command -ComputerName $FileServer2 -ScriptBlock { New-SmbShare -Name "Share1" -Path 'C:\Share1' -FullAccess "everyone" }
+Invoke-Command -ComputerName $FileServer2 -ScriptBlock { New-Item 'C:\Share1' -ItemType Directory }
+Invoke-Command -ComputerName $FileServer3 -ScriptBlock { New-SmbShare -Name "Share1" -Path 'C:\Share1' -FullAccess "everyone" }
+```
+
+各ファイルサーバーにDFSレプリケーションの機能をインストールします。
+
+```powershell
+Invoke-Command -ComputerName $FileServer1 -ScriptBlock { Install-WindowsFeature FS-DFS-Replication }
+Invoke-Command -ComputerName $FileServer2 -ScriptBlock { Install-WindowsFeature FS-DFS-Replication }
+Invoke-Command -ComputerName $FileServer3 -ScriptBlock { Install-WindowsFeature FS-DFS-Replication }
 ```
 
 ## DFSの設定
 
-- [PowerShellでDFSの環境を構築する](https://blog.shibata.tech/entry/2018/07/18/000420)
+JAPANドメインのドメインコントローラーをDFS名前空間サーバーとし、RESOURCEドメインにDFSレプリケーショングループを作成します。
+
+### DFSレプリケーションの設定
+
+RESOURCEドメインでレプリケーショングループを作ります。
+
+ここでは、ドメインコントローラーではなく、FileServer1に管理ツールを入れて、FileServer1からDFSレプリケーションの構成を行います。
+FileServer1に`Administrator@resource.example.com`でログインします。
+
+DFS管理ツールをインストールします。
+
+```powershell
+Install-WindowsFeature RSAT-DFS-Mgmt-Con
+```
+
+#### GUI
+
+サーバーマーネージャー > ツール > DFSの管理を開きます。
+
+レプリケーションを右クリックして「新しいレプリケーショングループ」を作成します。
+
+![](images/2020-03-11-21-04-58.png)
+
+以下の流れでレプリケーショングループを作成します。
+
+![](images/2020-03-11-21-06-07.png)
+
+![](images/2020-03-11-21-07-24.png)
+
+![](images/2020-03-11-21-19-18.png)
+
+![](images/2020-03-11-21-20-59.png)
+
+![](images/2020-03-11-21-21-48.png)
+
+![](images/2020-03-11-21-22-46.png)
+
+![](images/2020-03-11-21-24-19.png)
+
+![](images/2020-03-11-21-25-09.png)
+
+![](images/2020-03-11-21-25-42.png)
+
+```
+レプリケーション グループ名:
+	Share1
+
+レプリケーション グループの説明:
+	
+
+レプリケーション グループのドメイン:
+	resource.example.com
+
+レプリケーション グループ メンバー (3):
+	EC2AMAZ-7TRSGU1
+	EC2AMAZ-3GTQGC8
+	EC2AMAZ-RRC6G8L
+
+トポロジの種類:
+	フル メッシュ
+
+接続の一覧 (6):
+	EC2AMAZ-3GTQGC8 -> EC2AMAZ-7TRSGU1
+	EC2AMAZ-7TRSGU1 -> EC2AMAZ-3GTQGC8
+	EC2AMAZ-RRC6G8L -> EC2AMAZ-7TRSGU1
+	EC2AMAZ-7TRSGU1 -> EC2AMAZ-RRC6G8L
+	EC2AMAZ-RRC6G8L -> EC2AMAZ-3GTQGC8
+	EC2AMAZ-3GTQGC8 -> EC2AMAZ-RRC6G8L
+
+既定の接続スケジュール:
+	最大 帯域幅で継続してレプリケート 
+
+プライマリ メンバー:
+	EC2AMAZ-3GTQGC8
+
+レプリケート フォルダーの名前:
+	Share1
+
+メンバー: EC2AMAZ-3GTQGC8
+	パス: C:\Share1
+	状態: 有効
+
+メンバー: EC2AMAZ-7TRSGU1
+	パス: C:\Share1
+	状態: 有効
+
+メンバー: EC2AMAZ-RRC6G8L
+	パス: C:\Share1
+	状態: 有効
+
+NTFS アクセス許可: プライマリから
+
+
+```
+
+![](images/2020-03-11-21-27-28.png)
+
+![](images/2020-03-11-21-27-51.png)
+
+![](images/2020-03-11-21-46-47.png)
+
+ファイルを作成してみて、レプリケートされることを確認します。
+
+```powershell
+Invoke-Command -ComputerName $FileServer1 -ScriptBlock { New-Item C:\Share1\Test1.txt -Value abc }
+Invoke-Command -ComputerName $FileServer2 -ScriptBlock { dir C:\Share1 }
+Invoke-Command -ComputerName $FileServer3 -ScriptBlock { dir C:\Share1 }
+
+New-Item C:\Share1\Test1.txt -Value abc
+```
+
+```powershell
+PS C:\Users\Administrator> Invoke-Command -ComputerName $FileServer1 -ScriptBlock { New-Item C:\Share1\Test1.txt -Val
+ue abc }
+
+
+    ディレクトリ: C:\Share1
+
+
+Mode                LastWriteTime         Length Name                                PSComputerName
+----                -------------         ------ ----                                --------------
+-a----       2020/03/11     12:31              3 Test1.txt                           EC2AMAZ-7TRSGU1
+
+
+PS C:\Users\Administrator> Invoke-Command -ComputerName $FileServer2 -ScriptBlock { dir C:\Share1 }
+
+
+    ディレクトリ: C:\Share1
+
+
+Mode                LastWriteTime         Length Name                                PSComputerName
+----                -------------         ------ ----                                --------------
+-a----       2020/03/11     12:31              3 Test1.txt                           EC2AMAZ-3GTQGC8
+
+
+PS C:\Users\Administrator> Invoke-Command -ComputerName $FileServer3 -ScriptBlock { dir C:\Share1 }
+
+
+    ディレクトリ: C:\Share1
+
+
+Mode                LastWriteTime         Length Name                                PSComputerName
+----                -------------         ------ ----                                --------------
+-a----       2020/03/11     12:31              3 Test1.txt                           EC2AMAZ-RRC6G8L
+
+
+PS C:\Users\Administrator>
+```
+
+#### CUIの場合
+
+（動作確認できていないので参考）
+
+- https://docs.microsoft.com/en-us/powershell/module/dfsr/new-dfsreplicationgroup
+
+```powershell
+$Group = "Share2"
+New-DfsReplicationGroup -GroupName $Group
+Get-DfsReplicationGroup
+```
+
+レプリケーションフォルダーを作ります。
+
+```powershell
+$Folder = "Share2"
+New-DfsReplicatedFolder -GroupName $Group -FolderName $Folder
+Get-DfsReplicatedFolder -GroupName $Group
+```
+
+メンバーを追加します。
+
+```powershell
+$FileServer1 = "EC2AMAZ-7TRSGU1"
+$FileServer2 = "EC2AMAZ-3GTQGC8"
+$FileServer3 = "EC2AMAZ-RRC6G8L"
+Add-DfsrMember -GroupName $Group -ComputerName $FileServer1
+Add-DfsrMember -GroupName $Group -ComputerName $FileServer2
+Add-DfsrMember -GroupName $Group -ComputerName $FileServer3
+Get-DfsrMember -GroupName $Group
+```
+
+メンバーシップを作成します。
+
+```powershell
+$ContentPath1 = "C:\Share2"
+$ContentPath2 = "C:\Share2"
+$ContentPath3 = "C:\Share3"
+Set-DfsrMembership –GroupName $Group –FolderName $Folder –ContentPath $ContentPath1 –ComputerName $FileServer1 –PrimaryMember $True
+Set-DfsrMembership –GroupName $Group –FolderName $Folder –ContentPath $ContentPath2 –ComputerName $FileServer2 –PrimaryMember $False
+Set-DfsrMembership –GroupName $Group –FolderName $Folder –ContentPath $ContentPath3 –ComputerName $FileServer3 –PrimaryMember $False
+Get-DfsrMembership -GroupName $Group
+```
+
+接続を作成します。
+
+```powershell
+Add-DfsrConnection –GroupName $Group –SourceComputerName $FileServer1 –DestinationComputerName $FileServer2
+Add-DfsrConnection –GroupName $Group –SourceComputerName $FileServer2 –DestinationComputerName $FileServer3
+Add-DfsrConnection –GroupName $Group –SourceComputerName $FileServer3 –DestinationComputerName $FileServer1
+Get-DfsrConnection -GroupName $Group
+```
+
+### DFS名前空間の設定
 
 JAPANのドメインコントローラーをDFS名前空間サーバーとして設定します。
 
-DFSの構成に必要な機能をインストールします。
+- [PowerShellでDFSの環境を構築する](https://blog.shibata.tech/entry/2018/07/18/000420)
+
+ドメインコントローラーにDFS名前空間の構成に必要な機能をインストールします。
 
 ```powershell
-Import-Module ServerManager
-Get-WindowsFeature
-Install-WindowsFeature FS-DFS-Namespace, FS-DFS-Replication, RSAT-DFS-Mgmt-Con
-Get-WindowsFeature
+Install-WindowsFeature FS-DFS-Namespace, RSAT-DFS-Mgmt-Con
 ```
+
+#### GUI
+
+サーバーマーネージャー > ツール > DFSの管理を開きます。
+
+名前空間を右クリックして「新しい名前空間」を作成します。
+
+![](images/2020-03-11-21-56-56.png)
+
+以下の流れで名前空間を作成します。
+
+![](images/2020-03-11-21-59-09.png)
+
+![](images/2020-03-11-21-59-36.png)
+
+![](images/2020-03-11-22-00-20.png)
+
+![](images/2020-03-11-22-00-41.png)
+
+![](images/2020-03-11-22-01-15.png)
+
+作成した名前空間を右クリックして「新しいフォルダー」を作成します。
+
+![](images/2020-03-11-22-01-47.png)
+
+追加をクリックし、フォルダーターゲットを追加し「OK」をクリックします。
+
+![](images/2020-03-11-22-04-59.png)
+
+レプリケーショングループを作成するが聞かれますが、ここでは作成しません。
+
+![](images/2020-03-11-22-06-13.png)
+
+#### CUI
+
+（動作確認できていないので参考）
 
 DFSルートを作ります。
 名前空間サーバー上にある共有フォルダに対してNew-DfsnRootコマンドを実行します。
+
+- https://docs.microsoft.com/en-us/powershell/module/dfsn/new-dfsnroot
 
 ```powershell
 # 名前空間の作成
@@ -423,80 +670,78 @@ New-SmbShare –Name 'Public' –Path $DFSRootTarget -FullAccess everyone
 New-DfsnRoot -Path $DFSRootPath -Type DomainV2 -TargetPath $DFSRootSharedPath
 ```
 
-JAPANのドメインコントローラーにログインして確認します。
+## 動作確認
 
-## Amazon FSx CLIの実行
-
-- [Getting Started with the Amazon FSx CLI for Remote Management on PowerShell](https://docs.aws.amazon.com/fsx/latest/WindowsGuide/remote-pwrshell.html) 
-
-FSxのPowerShell用のエンドポイントを確認します。
-
-```
-aws fsx describe-file-systems | jq -r '.FileSystems[].WindowsConfiguration.RemoteAdministrationEndpoint'
-```
-
-RESOURCEのドメインコントローラーにAdministratorでログインし、PowerShellを実行します。
+JAPANドメインのuser1で、RESOURCEドメインのMember1コンピュータにログインし、そこから`\\japan.example.com\Public\Share1`がマウントできることを確認する。
 
 ```powershell
-enter-pssession -ComputerName amznfsxjcdhtmu2.resource.example.com -ConfigurationName FsxRemoteAdmin -sessionoption (New-PSSessionOption -uiCulture "en-US")
-```
-
-クォータを有効にします。単位はバイトです。
-
-```powershell
-Enable-FSxUserQuotas -Track -DefaultLimit 2000000 -DefaultWarningLimit 1000000
-Enable-FSxUserQuotas -Enforce -DefaultLimit 4000000 -DefaultWarningLimit 3000000
-```
-
-設定を確認します。
-
-```powershell
-Get-FSxUserQuotaSettings
+net use z: \\japan.example.com\Public\Share1
 ```
 
 ```powershell
-[amznfsxjcdhtmu2.resource.example.com]: PS>Get-FSxUserQuotaSettings
+PS C:\Users\user1> net use z: \\japan.example.com\Public\Share1
+コマンドは正常に終了しました。
 
-DefaultWarningLimit DefaultLimit State
-------------------- ------------ -----
-            3000000      4000000 Enforce
-
+PS C:\Users\user1>
 ```
 
-user1@japan.example.comのクオータを設定します。
-
-```shell
-Set-FSxUserQuotas -Domain "resource.example.com" -Name "user1" -Limit 60000 -WarningLimit 40000
-Set-FSxUserQuotas -Domain "resource.example.com" -Name "group1" -Limit 60000 -WarningLimit 40000
-Set-FSxUserQuotas -Domain "japan.example.com" -Name "user1" -Limit 60000 -WarningLimit 40000
-```
-
-設定を確認します。
+ファイルを作成する。
 
 ```powershell
-[amznfsxjcdhtmu2.resource.example.com]: PS>Get-FSxUserQuotaEntries
+New-Item Z:\Test2.txt -Value 123
+```
+
+ファイルが3つのファイルサーバーにレプリケートされることを確認する。
+名前解決ができるRESOUCEドメインのサーバーから確認する。
+
+```powershell
+$FileServer1 = "EC2AMAZ-7TRSGU1"
+$FileServer2 = "EC2AMAZ-3GTQGC8"
+$FileServer3 = "EC2AMAZ-RRC6G8L"
+Invoke-Command -ComputerName $FileServer1 -ScriptBlock { dir C:\Share1 }
+Invoke-Command -ComputerName $FileServer2 -ScriptBlock { dir C:\Share1 }
+Invoke-Command -ComputerName $FileServer3 -ScriptBlock { dir C:\Share1 }
+```
+
+```powershell
+PS C:\Users\Administrator> $FileServer1 = "EC2AMAZ-7TRSGU1"
+PS C:\Users\Administrator> $FileServer2 = "EC2AMAZ-3GTQGC8"
+PS C:\Users\Administrator> $FileServer3 = "EC2AMAZ-RRC6G8L"
+PS C:\Users\Administrator> Invoke-Command -ComputerName $FileServer1 -ScriptBlock { dir C:\Share1 }
 
 
-WarningLimit  : 40000
-DiskSpaceUsed : 0
-QuotaVolume   : Win32_LogicalDisk (DeviceID = "D:")
-Limit         : 60000
-Status        : OK
-User          : Win32_Account (Name = "user1", Domain = "RESOURCE")
-
-WarningLimit  : 40000
-DiskSpaceUsed : 61440
-QuotaVolume   : Win32_LogicalDisk (DeviceID = "D:")
-Limit         : 60000
-Status        : Exceeded
-User          : Win32_Account (Name = "user1", Domain = "JAPAN")
-
-WarningLimit  : 40000
-DiskSpaceUsed : 0
-QuotaVolume   : Win32_LogicalDisk (DeviceID = "D:")
-Limit         : 60000
-Status        : OK
-User          : Win32_Account (Name = "group1", Domain = "RESOURCE")
+    ディレクトリ: C:\Share1
 
 
+Mode                LastWriteTime         Length Name                                PSComputerName
+----                -------------         ------ ----                                --------------
+-a----       2020/03/11     12:31              3 Test1.txt                           EC2AMAZ-7TRSGU1
+-a----       2020/03/11     13:26              3 Test2.txt                           EC2AMAZ-7TRSGU1
+
+
+PS C:\Users\Administrator> Invoke-Command -ComputerName $FileServer2 -ScriptBlock { dir C:\Share1 }
+
+
+    ディレクトリ: C:\Share1
+
+
+Mode                LastWriteTime         Length Name                                PSComputerName
+----                -------------         ------ ----                                --------------
+-a----       2020/03/11     12:31              3 Test1.txt                           EC2AMAZ-3GTQGC8
+-a----       2020/03/11     13:26              3 Test2.txt                           EC2AMAZ-3GTQGC8
+
+
+PS C:\Users\Administrator> Invoke-Command -ComputerName $FileServer3 -ScriptBlock { dir C:\Share1 }
+
+
+    ディレクトリ: C:\Share1
+
+
+Mode                LastWriteTime         Length Name                                PSComputerName
+----                -------------         ------ ----                                --------------
+-a----       2020/03/11     12:31              3 Test1.txt                           EC2AMAZ-RRC6G8L
+-a----       2020/03/11     13:26              3 Test2.txt                           EC2AMAZ-RRC6G8L
+
+
+PS C:\Users\Administrator>
 ```
