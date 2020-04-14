@@ -745,3 +745,12 @@ Mode                LastWriteTime         Length Name                           
 
 PS C:\Users\Administrator>
 ```
+
+## 優先順位の設定
+
+```powershell
+Get-DfsnFolderTarget -Path "\\japan.example.com\Public\Share1"
+Set-DfsnFolderTarget -Path "\\japan.example.com\Public\Share1" -TargetPath "\\EC2AMAZ-7TRSGU1.resource.example.com\Share1" -ReferralPriorityRank 10
+Set-DfsnFolderTarget -Path "\\japan.example.com\Public\Share1" -TargetPath "\\EC2AMAZ-3GTQGC8.resource.example.com\Share1" -ReferralPriorityRank 20
+Set-DfsnFolderTarget -Path "\\japan.example.com\Public\Share1" -TargetPath "\\EC2AMAZ-RRC6G8L.resource.example.com\Share1" -ReferralPriorityRank 30
+```
